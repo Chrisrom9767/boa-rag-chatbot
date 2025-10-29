@@ -12,7 +12,7 @@ from typing import List, Tuple, Optional
 import streamlit as st
 import torch
 from langchain_community.vectorstores import FAISS
-# Recommandé si dispo:
+# Si dispo et pour éviter les warnings:
 # from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import groq
@@ -22,76 +22,100 @@ import groq
 # ==============================
 st.set_page_config(page_title="Chatbot Conformité — BOA Group", page_icon="✅", layout="wide")
 
-# ---- CSS pro + modes clair/sombre (live toggle)
 def inject_css(dark: bool):
-    # Palette
+    # ----- Couleurs / variables (vert sombre + accents demandés)
+    accent = "#0f5c2d"                     # vert profond
+    accentShadow = "rgba(15, 92, 45, 0.30)"  # intensité d’ombre ~3
+    accent25 = "rgba(15, 92, 45, 0.25)"      # voile 25%
+
     if dark:
-        bg = "#0f172a"         # slate-900
-        panel = "#111827"      # gray-900
-        card = "#1f2937"       # gray-800
-        text = "#e5e7eb"       # gray-200
-        accent = "#16a34a"     # green-600
-        sub = "#9ca3af"        # gray-400
-        border = "#374151"     # gray-700
+        bg = "#0f172a"
+        panel = "#111827"
+        card = "#1f2937"
+        text = "#e5e7eb"
+        sub = "#9ca3af"
+        border = "#374151"
     else:
-        bg = "#ffffff"
-        panel = "#f8fafc"      # slate-50
+        bg = "#ffffff"       # fond blanc demandé
+        panel = "#f8fafc"
         card = "#ffffff"
-        text = "#0f172a"       # slate-900
-        accent = "#166534"     # green-800
-        sub = "#475569"        # slate-600
-        border = "#e5e7eb"     # gray-200
+        text = "#0f172a"
+        sub = "#475569"
+        border = "#e5e7eb"
 
     st.markdown(f"""
     <style>
-      .stApp {{
-        background: linear-gradient(180deg, {panel} 0%, {bg} 100%) !important;
+      :root {{
+        --boa-accent: {accent};
+        --boa-accent-25: {accent25};
+        --boa-accent-shadow: {accentShadow};
+        --boa-text: {text};
+        --boa-sub: {sub};
+        --boa-border: {border};
+        --boa-card: {card};
+        --boa-panel: {panel};
+        --boa-bg: {bg};
       }}
-      /* Header bar */
+
+      .stApp {{
+        background: linear-gradient(180deg, var(--boa-panel) 0%, var(--boa-bg) 100%) !important;
+      }}
+
+      /* Header */
       .boa-header {{
-        border: 1px solid {border};
-        background: {card};
+        border: 1px solid var(--boa-border);
+        background: var(--boa-card);
         border-radius: 16px;
         padding: 14px 18px;
         display: flex; align-items: center; gap: 14px;
-        box-shadow: 0 8px 28px rgba(0,0,0,{0.28 if dark else 0.06});
+        box-shadow: 0 10px 30px var(--boa-accent-shadow);
       }}
-      .boa-title {{
-        font-weight: 700; letter-spacing: .3px; color: {text};
-        font-size: 20px; margin: 0;
-      }}
-      .boa-sub {{
-        font-size: 13px; color: {sub}; margin: 0;
-      }}
+      .boa-title {{ font-weight: 700; letter-spacing: .3px; color: var(--boa-text); font-size: 20px; margin: 0; }}
+      .boa-sub {{ font-size: 13px; color: var(--boa-sub); margin: 0; }}
       .boa-badge {{
-        color: white; background: {accent};
-        padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+        color: white; background: var(--boa-accent);
+        padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+        box-shadow: 0 4px 14px var(--boa-accent-shadow);
       }}
 
       /* Chat bubbles */
       .stChatMessage[data-testid="stChatMessage"] {{
-        background: {card};
-        border: 1px solid {border};
+        background: var(--boa-card);
+        border: 1px solid var(--boa-border);
         border-radius: 18px;
         padding: 14px 16px;
-        box-shadow: 0 6px 20px rgba(0,0,0,{0.22 if dark else 0.05});
+        box-shadow: 0 6px 22px rgba(0,0,0,{0.22 if dark else 0.06});
       }}
-      .stChatMessage .stMarkdown p {{
-        color: {text}; line-height: 1.55;
+      .stChatMessage .stMarkdown p {{ color: var(--boa-text); line-height: 1.55; }}
+      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{ color: var(--boa-text); }}
+
+      /* Inputs & contrôles – accents 25% */
+      .stTextInput input, .stTextArea textarea, .stSelectbox, .stSlider, .stNumberInput input {{
+        border-radius: 10px !important;
       }}
-      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
-        color: {text};
+      .stTextInput input:focus, .stTextArea textarea:focus {{
+        outline: 2px solid var(--boa-accent-25) !important;
+        box-shadow: 0 0 0 4px var(--boa-accent-25) !important;
+        border-color: var(--boa-accent) !important;
       }}
+      .stButton>button {{
+        border-radius: 10px !important;
+        border: 1px solid var(--boa-border) !important;
+      }}
+      .stButton>button:hover {{
+        box-shadow: 0 6px 18px var(--boa-accent-25) !important;
+        border-color: var(--boa-accent) !important;
+      }}
+
+      /* Liens & code */
+      a, .stMarkdown a {{ color: var(--boa-accent) !important; text-decoration: none; }}
+      a:hover, .stMarkdown a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
       code, pre {{
         font-size: 12.5px !important;
         background: {"#0b1220" if dark else "#f5f7fb"} !important;
-        border: 1px solid {border} !important;
+        border: 1px solid var(--boa-border) !important;
         border-radius: 10px !important;
       }}
-      .stSlider, .stSelectbox, .stTextInput, .stNumberInput {{
-        color: {text};
-      }}
-      .css-1kyxreq, .e1f1d6gn3 {{ color: {text}; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -107,8 +131,7 @@ client = groq.Client(api_key=GROQ_API_KEY)
 
 INDEX_PATH = os.getenv("INDEX_PATH", "faiss-compliance-banking-multilingual-index")
 DRIVE_LINK = os.getenv("DRIVE_LINK", "https://drive.google.com/drive/folders/TON_LIEN_FIXE_ICI")
-LOGO_URL = os.getenv("LOGO_URL", "")  # mets un PNG/SVG hébergé si tu veux un logo
-
+LOGO_URL = os.getenv("LOGO_URL", "")
 MAX_SOURCES = 5
 DEFAULT_MODEL = "llama-3.1-8b-instant"
 
@@ -273,7 +296,7 @@ def ask_groq(system_prompt: str, user_question: str, context_text: str,
     )
     return resp.choices[0].message.content.strip()
 
-def add_footer(answer: str, sources: List[str], lang: str, used_context: bool) -> str:
+def add_footer(answer: str, sources: List[str], lang: str, used_context: bool, mode_rag: bool) -> str:
     if used_context:
         if sources:
             answer += ("\n\nSources :\n" if lang == "fr" else "\n\nSources:\n") + "\n".join(f"- {s}" for s in sources)
@@ -284,13 +307,21 @@ def add_footer(answer: str, sources: List[str], lang: str, used_context: bool) -
                     f"\n\n📂 Source folder:\n➡️ {DRIVE_LINK} (Access documents)"
                 )
     else:
-        disclaimer = (
-            "\n\n⚠️ Cette réponse ne provient pas de la base documentaire indexée. "
-            "Merci de vous rapprocher d’un expert en conformité pour validation."
-            if lang == "fr" else
-            "\n\n⚠️ This answer does not come from the indexed knowledge base. "
-            "Please consult a compliance expert for validation."
-        )
+        # LLM seul OU pas de contexte trouvé
+        if mode_rag:
+            # Mode RAG mais aucun extrait utile
+            disclaimer = (
+                "\n\n⚠️ Aucun extrait pertinent n’a été trouvé dans la base indexée."
+                if lang == "fr" else
+                "\n\n⚠️ No relevant excerpt was found in the indexed knowledge base."
+            )
+        else:
+            # Mode LLM seul explicitement activé
+            disclaimer = (
+                "\n\nℹ️ Mode **LLM seul** activé : réponse générale sans base documentaire."
+                if lang == "fr" else
+                "\n\nℹ️ **LLM-only** mode enabled: general answer without the knowledge base."
+            )
         answer += disclaimer
         if DRIVE_LINK:
             answer += (
@@ -301,19 +332,19 @@ def add_footer(answer: str, sources: List[str], lang: str, used_context: bool) -
     return answer
 
 # ==============================
-# STATE: Conversations
+# STATE: Conversations & UI
 # ==============================
 def init_state():
-    if "dark_mode" not in st.session_state: st.session_state.dark_mode = True
-    if "convos" not in st.session_state: st.session_state.convos = {}   # id -> list[{"role","content"}]
+    if "dark_mode" not in st.session_state: st.session_state.dark_mode = False  # fond blanc par défaut
+    if "convos" not in st.session_state: st.session_state.convos = {}
     if "active_id" not in st.session_state:
         ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         st.session_state.active_id = f"conv-{ts}"
         st.session_state.convos[st.session_state.active_id] = [
             {"role": "assistant", "content": "Bonjour 👋 Je suis **Lexi**. Posez-moi une question conformité (FR/EN)."}
         ]
-    if "conv_titles" not in st.session_state: st.session_state.conv_titles = {st.session_state.active_id: "Nouvelle discussion"}
-    if "retriever_cache" not in st.session_state: st.session_state.retriever_cache = None
+    if "conv_titles" not in st.session_state:
+        st.session_state.conv_titles = {st.session_state.active_id: "Nouvelle discussion"}
 
 init_state()
 inject_css(st.session_state.dark_mode)
@@ -346,6 +377,14 @@ st.write("")
 with st.sidebar:
     st.subheader("⚙️ Paramètres")
     st.toggle("🌙 Mode sombre", key="dark_mode", value=st.session_state.dark_mode, on_change=lambda: inject_css(st.session_state.dark_mode))
+    # ---- Sélecteur de mode : RAG vs LLM seul
+    mode_label = st.radio(
+        "Mode de réponse",
+        options=["RAG (Base documentaire)", "LLM seul"],
+        index=0,
+        help="Choisissez si le chatbot doit utiliser l’index vectorisé (RAG) ou répondre sans retrieval."
+    )
+    MODE_RAG = (mode_label == "RAG (Base documentaire)")
     st.write("---")
     temperature = st.slider("🎯 Température (précision)", 0.0, 0.7, 0.15, 0.01,
                             help="Plus bas = plus déterministe, plus concis.")
@@ -354,7 +393,6 @@ with st.sidebar:
 
     # Gestion historique
     st.subheader("🗂️ Conversations")
-    # Sélecteur de conversation
     conv_ids = list(st.session_state.convos.keys())
     current_idx = conv_ids.index(st.session_state.active_id) if st.session_state.active_id in conv_ids else 0
     selected = st.selectbox("Sélectionner", options=conv_ids, index=current_idx,
@@ -408,9 +446,12 @@ with st.sidebar:
             st.error(f"Import impossible : {e}")
 
     st.write("---")
-    # Infos index
+    # Infos index + mode courant
     retriever, ntotal = load_retriever(INDEX_PATH)
-    st.caption(f"📁 Index FAISS : `{INDEX_PATH}` — Vecteurs : **{ntotal}**" if ntotal else "Mode **dégradé** (sans index)")
+    if MODE_RAG:
+        st.caption(f"📁 Mode: **RAG** • Index: `{INDEX_PATH}` • Vecteurs: **{ntotal}**" if ntotal else "📁 Mode: **RAG** • ⚠️ Index introuvable → fallback sans contexte")
+    else:
+        st.caption("🧠 Mode: **LLM seul** (pas de retrieval)")
     if DRIVE_LINK:
         st.link_button("📂 Dossier sources", url=DRIVE_LINK, use_container_width=True)
 
@@ -442,25 +483,31 @@ if prompt:
         st.session_state.convos[st.session_state.active_id].append({"role": "assistant", "content": reply})
         st.stop()
 
-    # RAG normal
+    # RAG conditionnel selon le mode
     system_prompt = SYSTEM_PROMPT_FR if lang == "fr" else SYSTEM_PROMPT_EN
-
     used_context = False
     context_text, sources = "", []
+
     start_retr = time.time()
-    if retriever is not None:
+    if (MODE_RAG and retriever is not None):
         q = e5_query(prompt)
         docs = retriever.invoke(q)
         context_text, sources = build_context(docs, max_chars=4000)
         used_context = bool(context_text.strip())
-    retr_ms = (time.time() - start_retr) * 1000
+    retr_ms = (time.time() - start_retr) * 1000 if MODE_RAG else 0
 
     # LLM
     try:
         start_llm = time.time()
         answer = ask_groq(system_prompt, prompt, context_text, lang, used_context,
-                          temperature=temperature, max_tokens=max_tokens)
-        answer = add_footer(answer, sources, lang, used_context)
+                          temperature=st.session_state.get("temperature", 0.15) if "temperature" in st.session_state else 0.15,
+                          max_tokens=st.session_state.get("max_tokens", 700) if "max_tokens" in st.session_state else 700)
+        # Utiliser les sliders live
+        answer = ask_groq(system_prompt, prompt, context_text, lang, used_context,
+                          temperature=st.session_state.get("temperature_ui", None) or st.session_state.get("temperature", 0.15) if False else st.sidebar.session_state.get("🎯 Température (précision)", 0.15),
+                          max_tokens=st.sidebar.session_state.get("🧾 Longueur max (tokens)", 700))
+        # Ajout footer selon mode
+        answer = add_footer(answer, sources, lang, used_context, MODE_RAG)
         gen_ms = (time.time() - start_llm) * 1000
 
         with st.chat_message("assistant"):
@@ -468,8 +515,11 @@ if prompt:
 
         st.session_state.convos[st.session_state.active_id].append({"role": "assistant", "content": answer})
 
-        # Footer perf
-        st.caption(f"🔎 Retrieval: {retr_ms:.0f} ms • 🧠 Génération: {gen_ms:.0f} ms • 🔥 Température: {temperature}")
+        # Perf caption
+        if MODE_RAG:
+            st.caption(f"🔎 Retrieval: {retr_ms:.0f} ms • 🧠 Génération: {gen_ms:.0f} ms • Mode: RAG")
+        else:
+            st.caption(f"🧠 Génération: {gen_ms:.0f} ms • Mode: LLM seul")
     except Exception as e:
         with st.chat_message("assistant"):
             st.error(f"⚠️ Erreur API Groq : {e}")
