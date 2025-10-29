@@ -1,18 +1,13 @@
 # app.py
 # -*- coding: utf-8 -*-
-import os
-import re
-import json
-import time
-import base64
-from io import StringIO
+import os, re, json, time, base64
 from datetime import datetime
 from typing import List, Tuple, Optional
 
 import streamlit as st
 import torch
 from langchain_community.vectorstores import FAISS
-# Si dispo et pour éviter les warnings:
+# Option recommandé (si installé) pour éviter les warnings:
 # from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import groq
@@ -23,38 +18,35 @@ import groq
 st.set_page_config(page_title="Chatbot Conformité — BOA Group", page_icon="✅", layout="wide")
 
 def inject_css(dark: bool):
-    # ----- Couleurs / variables (vert sombre + accents demandés)
-    accent = "#0f5c2d"                     # vert profond
-    accentShadow = "rgba(15, 92, 45, 0.30)"  # intensité d’ombre ~3
-    accent25 = "rgba(15, 92, 45, 0.25)"      # voile 25%
+    # ----- Vert sombre & accents demandés
+    accent      = "#0f5c2d"                       # vert profond
+    accent25    = "rgba(15, 92, 45, 0.25)"        # voile 25%
+    accentSh3   = "rgba(15, 92, 45, 0.30)"        # ombre niveau 3
 
     if dark:
-        bg = "#0f172a"
-        panel = "#111827"
-        card = "#1f2937"
-        text = "#e5e7eb"
-        sub = "#9ca3af"
-        border = "#374151"
+        bg, panel, card = "#0f172a", "#111827", "#1f2937"
+        text, sub, border = "#e5e7eb", "#9ca3af", "#374151"
+        codebg = "#0b1220"
+        bubble_user = "rgba(15,92,45,0.15)"
     else:
-        bg = "#ffffff"       # fond blanc demandé
-        panel = "#f8fafc"
-        card = "#ffffff"
-        text = "#0f172a"
-        sub = "#475569"
-        border = "#e5e7eb"
+        bg, panel, card = "#ffffff", "#f8fafc", "#ffffff"   # fond blanc
+        text, sub, border = "#0f172a", "#475569", "#e5e7eb"
+        codebg = "#f5f7fb"
+        bubble_user = "rgba(15,92,45,0.08)"
 
     st.markdown(f"""
     <style>
       :root {{
         --boa-accent: {accent};
         --boa-accent-25: {accent25};
-        --boa-accent-shadow: {accentShadow};
+        --boa-accent-shadow: {accentSh3};
         --boa-text: {text};
         --boa-sub: {sub};
         --boa-border: {border};
         --boa-card: {card};
         --boa-panel: {panel};
         --boa-bg: {bg};
+        --boa-bubble-user: {bubble_user};
       }}
 
       .stApp {{
@@ -71,36 +63,62 @@ def inject_css(dark: bool):
         box-shadow: 0 10px 30px var(--boa-accent-shadow);
       }}
       .boa-title {{ font-weight: 700; letter-spacing: .3px; color: var(--boa-text); font-size: 20px; margin: 0; }}
-      .boa-sub {{ font-size: 13px; color: var(--boa-sub); margin: 0; }}
+      .boa-sub   {{ font-size: 13px; color: var(--boa-sub); margin: 0; }}
       .boa-badge {{
-        color: white; background: var(--boa-accent);
+        color: #fff; background: var(--boa-accent);
         padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
         box-shadow: 0 4px 14px var(--boa-accent-shadow);
       }}
 
-      /* Chat bubbles */
-      .stChatMessage[data-testid="stChatMessage"] {{
-        background: var(--boa-card);
-        border: 1px solid var(--boa-border);
-        border-radius: 18px;
-        padding: 14px 16px;
-        box-shadow: 0 6px 22px rgba(0,0,0,{0.22 if dark else 0.06});
+      /* Conteneur chat plus étroit et centré */
+      [data-testid="stVerticalBlock"] > div:first-child {{
+        max-width: 1100px;
+        margin: 0 auto;
       }}
-      .stChatMessage .stMarkdown p {{ color: var(--boa-text); line-height: 1.55; }}
-      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{ color: var(--boa-text); }}
 
-      /* Inputs & contrôles – accents 25% */
-      .stTextInput input, .stTextArea textarea, .stSelectbox, .stSlider, .stNumberInput input {{
-        border-radius: 10px !important;
+      /* Bulles */
+      [data-testid="stChatMessage"] {{
+        border-radius: 18px;
+        border: 1px solid var(--boa-border);
+        box-shadow: 0 6px 22px rgba(0,0,0,{0.22 if dark else 0.06});
+        padding: 12px 14px;
+        width: fit-content;
+        max-width: 78%;
+        margin-bottom: 10px;
       }}
+      .stChatMessage .stMarkdown p {{ color: var(--boa-text); line-height: 1.55; font-size: 15px; }}
+
+      /* Alignement gauche/droite via avatar alt (assistant/user) */
+      [data-testid="stChatMessage"]:has(img[alt*="assistant"]) {{
+        background: var(--boa-card);
+        margin-right: auto;
+      }}
+      [data-testid="stChatMessage"]:has(img[alt*="user"]) {{
+        background: var(--boa-bubble-user);
+        border-color: var(--boa-accent-25);
+        margin-left: auto;
+      }}
+
+      /* Avatars ronds + bord vert subtil pour Lexi */
+      [data-testid="stChatMessage"] img[alt*="assistant"] {{
+        border-radius: 50%;
+        border: 2px solid var(--boa-accent);
+        box-shadow: 0 6px 16px var(--boa-accent-25);
+      }}
+      [data-testid="stChatMessage"] img[alt*="user"] {{
+        border-radius: 50%;
+        border: 2px solid var(--boa-border);
+      }}
+
+      /* Inputs/Focus – voile 25% sur accent */
+      .stTextInput input, .stTextArea textarea, .stSelectbox, .stSlider, .stNumberInput input {{ border-radius: 10px !important; }}
       .stTextInput input:focus, .stTextArea textarea:focus {{
         outline: 2px solid var(--boa-accent-25) !important;
         box-shadow: 0 0 0 4px var(--boa-accent-25) !important;
         border-color: var(--boa-accent) !important;
       }}
       .stButton>button {{
-        border-radius: 10px !important;
-        border: 1px solid var(--boa-border) !important;
+        border-radius: 10px !important; border: 1px solid var(--boa-border) !important;
       }}
       .stButton>button:hover {{
         box-shadow: 0 6px 18px var(--boa-accent-25) !important;
@@ -112,7 +130,7 @@ def inject_css(dark: bool):
       a:hover, .stMarkdown a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
       code, pre {{
         font-size: 12.5px !important;
-        background: {"#0b1220" if dark else "#f5f7fb"} !important;
+        background: {("#0b1220" if dark else "#f5f7fb")} !important;
         border: 1px solid var(--boa-border) !important;
         border-radius: 10px !important;
       }}
@@ -131,9 +149,9 @@ client = groq.Client(api_key=GROQ_API_KEY)
 
 INDEX_PATH = os.getenv("INDEX_PATH", "faiss-compliance-banking-multilingual-index")
 DRIVE_LINK = os.getenv("DRIVE_LINK", "https://drive.google.com/drive/folders/TON_LIEN_FIXE_ICI")
-LOGO_URL = os.getenv("LOGO_URL", "")
-MAX_SOURCES = 5
+LOGO_URL = os.getenv("LOGO_URL", "")  # URL d’un logo si tu en as un
 DEFAULT_MODEL = "llama-3.1-8b-instant"
+MAX_SOURCES = 5
 
 # ==============================
 # PROMPTS SYSTÈME
@@ -152,7 +170,7 @@ If no context is provided, give a general best-practice compliance answer, conse
 Use bullets if helpful. Do not fabricate details unsupported by the context."""
 
 # ==============================
-# SMALL TALK
+# SALUTATIONS / SMALL TALK
 # ==============================
 def detect_lang_simple(text: str) -> str:
     if not text:
@@ -160,13 +178,13 @@ def detect_lang_simple(text: str) -> str:
     t = text.lower()
     fr_hits = sum(w in t for w in [
         "bonjour","salut","svp","pièce d'identité","contrôles","obligatoires","nouveau",
-        "compte","kyc","conformité","client","pourquoi","comment","quels","quelle",
-        "quelles","lcb-ft","blanchiment","sanctions","rgpd","procédure","audit","ça va","ca va"
+        "compte","kyc","conformité","client","pourquoi","comment","quels","quelle","quelles",
+        "lcb-ft","blanchiment","sanctions","rgpd","procédure","audit","ça va","ca va"
     ])
     en_hits = sum(w in t for w in [
-        "hello","hi","please","identity","controls","mandatory","new","account",
-        "kyc","compliance","customer","why","how","what","which","aml","sanctions",
-        "gdpr","procedure","audit","how are you","how's it going"
+        "hello","hi","please","identity","controls","mandatory","new","account","kyc","compliance",
+        "customer","why","how","what","which","aml","sanctions","gdpr","procedure","audit",
+        "how are you","how's it going"
     ])
     return "en" if en_hits > fr_hits else "fr"
 
@@ -238,8 +256,7 @@ def e5_query(text: str) -> str:
 def build_context(docs, max_chars=4000) -> Tuple[str, List[str]]:
     if not docs:
         return "", []
-    seen = set()
-    parts, sources = [], []
+    seen, parts, sources = set(), [], []
     for d in docs:
         meta = d.metadata or {}
         sf = meta.get("source_file", meta.get("source", "inconnu"))
@@ -265,16 +282,9 @@ def ask_groq(system_prompt: str, user_question: str, context_text: str,
                  if lang == "fr" else
                  "- Answer concisely with clear structure (short sentences, bullets if helpful).\n")
     if used_context:
-        instruction = (
-            "- Base your answer ONLY on the context above.\n"
-            "- If the context is insufficient, say so explicitly.\n"
-        )
+        instruction = "- Base your answer ONLY on the context above.\n- If the context is insufficient, say so explicitly.\n"
     else:
-        instruction = (
-            "- No context was found. Provide a general, best-practice compliance answer.\n"
-            "- Keep it conservative and avoid jurisdiction-specific claims.\n"
-            "- Be polite and helpful, but do not fabricate facts.\n"
-        )
+        instruction = "- No context was found. Provide a general, best-practice compliance answer.\n- Keep it conservative and avoid jurisdiction-specific claims.\n- Be polite and helpful, but do not fabricate facts.\n"
 
     user_block = (
         f"{lang_instruction}\n\n"
@@ -301,38 +311,27 @@ def add_footer(answer: str, sources: List[str], lang: str, used_context: bool, m
         if sources:
             answer += ("\n\nSources :\n" if lang == "fr" else "\n\nSources:\n") + "\n".join(f"- {s}" for s in sources)
             if DRIVE_LINK:
-                answer += (
-                    f"\n\n📂 Dossier source :\n➡️ {DRIVE_LINK} (Accéder aux documents)"
-                    if lang == "fr" else
-                    f"\n\n📂 Source folder:\n➡️ {DRIVE_LINK} (Access documents)"
-                )
+                answer += (f"\n\n📂 Dossier source :\n➡️ {DRIVE_LINK} (Accéder aux documents)"
+                           if lang == "fr" else
+                           f"\n\n📂 Source folder:\n➡️ {DRIVE_LINK} (Access documents)")
     else:
-        # LLM seul OU pas de contexte trouvé
         if mode_rag:
-            # Mode RAG mais aucun extrait utile
-            disclaimer = (
-                "\n\n⚠️ Aucun extrait pertinent n’a été trouvé dans la base indexée."
-                if lang == "fr" else
-                "\n\n⚠️ No relevant excerpt was found in the indexed knowledge base."
-            )
+            disclaimer = ("\n\n⚠️ Aucun extrait pertinent n’a été trouvé dans la base indexée."
+                          if lang == "fr" else
+                          "\n\n⚠️ No relevant excerpt was found in the indexed knowledge base.")
         else:
-            # Mode LLM seul explicitement activé
-            disclaimer = (
-                "\n\nℹ️ Mode **LLM seul** activé : réponse générale sans base documentaire."
-                if lang == "fr" else
-                "\n\nℹ️ **LLM-only** mode enabled: general answer without the knowledge base."
-            )
+            disclaimer = ("\n\nℹ️ Mode **LLM seul** activé : réponse générale sans base documentaire."
+                          if lang == "fr" else
+                          "\n\nℹ️ **LLM-only** mode enabled: general answer without the knowledge base.")
         answer += disclaimer
         if DRIVE_LINK:
-            answer += (
-                f"\n\n📂 Documentation :\n➡️ {DRIVE_LINK} (Accéder aux documents)"
-                if lang == "fr" else
-                f"\n\n📂 Documentation:\n➡️ {DRIVE_LINK} (Access documents)"
-            )
+            answer += (f"\n\n📂 Documentation :\n➡️ {DRIVE_LINK} (Accéder aux documents)"
+                       if lang == "fr" else
+                       f"\n\n📂 Documentation:\n➡️ {DRIVE_LINK} (Access documents)")
     return answer
 
 # ==============================
-# STATE: Conversations & UI
+# STATE
 # ==============================
 def init_state():
     if "dark_mode" not in st.session_state: st.session_state.dark_mode = False  # fond blanc par défaut
@@ -372,18 +371,13 @@ with colH2:
 st.write("")
 
 # ==============================
-# SIDEBAR — Contrôles Pro
+# SIDEBAR — CONTRÔLES
 # ==============================
 with st.sidebar:
     st.subheader("⚙️ Paramètres")
     st.toggle("🌙 Mode sombre", key="dark_mode", value=st.session_state.dark_mode, on_change=lambda: inject_css(st.session_state.dark_mode))
-    # ---- Sélecteur de mode : RAG vs LLM seul
-    mode_label = st.radio(
-        "Mode de réponse",
-        options=["RAG (Base documentaire)", "LLM seul"],
-        index=0,
-        help="Choisissez si le chatbot doit utiliser l’index vectorisé (RAG) ou répondre sans retrieval."
-    )
+    mode_label = st.radio("Mode de réponse", ["RAG (Base documentaire)", "LLM seul"], index=0,
+                          help="Utiliser l’index vectorisé (RAG) ou répondre sans retrieval.")
     MODE_RAG = (mode_label == "RAG (Base documentaire)")
     st.write("---")
     temperature = st.slider("🎯 Température (précision)", 0.0, 0.7, 0.15, 0.01,
@@ -391,7 +385,7 @@ with st.sidebar:
     max_tokens = st.slider("🧾 Longueur max (tokens)", 256, 1200, 700, 16)
     st.write("---")
 
-    # Gestion historique
+    # Historique
     st.subheader("🗂️ Conversations")
     conv_ids = list(st.session_state.convos.keys())
     current_idx = conv_ids.index(st.session_state.active_id) if st.session_state.active_id in conv_ids else 0
@@ -401,29 +395,29 @@ with st.sidebar:
         st.session_state.active_id = selected
 
     new_name = st.text_input("Renommer la conversation", st.session_state.conv_titles.get(st.session_state.active_id, "Nouvelle discussion"))
-    if st.button("💾 Renommer"):
-        st.session_state.conv_titles[st.session_state.active_id] = new_name or st.session_state.active_id
-
-    cols = st.columns(3)
-    with cols[0]:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("💾 Renommer"):
+            st.session_state.conv_titles[st.session_state.active_id] = new_name or st.session_state.active_id
+    with c2:
         if st.button("🆕 Nouveau"):
             ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
             new_id = f"conv-{ts}"
             st.session_state.convos[new_id] = [{"role": "assistant", "content": "Nouvelle discussion. Comment puis-je aider ?"}]
             st.session_state.conv_titles[new_id] = "Nouvelle discussion"
             st.session_state.active_id = new_id
-    with cols[1]:
-        if st.button("🧹 Effacer"):
-            st.session_state.convos[st.session_state.active_id] = [{"role": "assistant", "content": "Conversation réinitialisée."}]
-    with cols[2]:
+    with c3:
         if st.button("🗑️ Supprimer"):
             if len(st.session_state.convos) > 1:
                 st.session_state.convos.pop(st.session_state.active_id, None)
                 st.session_state.conv_titles.pop(st.session_state.active_id, None)
                 st.session_state.active_id = list(st.session_state.convos.keys())[0]
 
-    # Export / Import JSON
+    if st.button("🧹 Effacer conversation"):
+        st.session_state.convos[st.session_state.active_id] = [{"role": "assistant", "content": "Conversation réinitialisée."}]
+
     st.write("---")
+    # Export / Import JSON
     if st.button("⬇️ Exporter l’historique (JSON)"):
         payload = {
             "titles": st.session_state.conv_titles,
@@ -446,7 +440,7 @@ with st.sidebar:
             st.error(f"Import impossible : {e}")
 
     st.write("---")
-    # Infos index + mode courant
+    # Infos index + mode
     retriever, ntotal = load_retriever(INDEX_PATH)
     if MODE_RAG:
         st.caption(f"📁 Mode: **RAG** • Index: `{INDEX_PATH}` • Vecteurs: **{ntotal}**" if ntotal else "📁 Mode: **RAG** • ⚠️ Index introuvable → fallback sans contexte")
@@ -456,70 +450,70 @@ with st.sidebar:
         st.link_button("📂 Dossier sources", url=DRIVE_LINK, use_container_width=True)
 
 # ==============================
-# CHAT — Affichage historique actif
+# CHAT — AFFICHAGE (avatars & bulles)
 # ==============================
+assistant_avatar = LOGO_URL if LOGO_URL else "🛡️"
+user_avatar = "👤"
+
 active_msgs = st.session_state.convos[st.session_state.active_id]
 for m in active_msgs:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+    if m["role"] == "assistant":
+        with st.chat_message("assistant", avatar=assistant_avatar):
+            st.markdown(m["content"])
+    else:
+        with st.chat_message("user", avatar=user_avatar):
+            st.markdown(m["content"])
 
 # ==============================
-# LOOP — Entrée utilisateur
+# LOOP — ENTRÉE UTILISATEUR
 # ==============================
 prompt = st.chat_input("Écrivez votre question… (FR/EN)")
 if prompt:
-    # push user msg
+    # Affichage immédiat côté utilisateur (à droite)
     st.session_state.convos[st.session_state.active_id].append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=user_avatar):
         st.markdown(prompt)
 
-    # Langue + small talk
+    # Small talk court → réponse directe sans LLM
     lang = detect_lang_simple(prompt)
     kind = classify_smalltalk(prompt, lang)
     if kind is not None and len(prompt.strip()) <= 120:
         reply = smalltalk_reply(kind, lang)
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(reply)
         st.session_state.convos[st.session_state.active_id].append({"role": "assistant", "content": reply})
         st.stop()
 
-    # RAG conditionnel selon le mode
+    # Préparation RAG conditionnel
     system_prompt = SYSTEM_PROMPT_FR if lang == "fr" else SYSTEM_PROMPT_EN
     used_context = False
     context_text, sources = "", []
-
     start_retr = time.time()
-    if (MODE_RAG and retriever is not None):
+    if MODE_RAG and retriever is not None:
         q = e5_query(prompt)
         docs = retriever.invoke(q)
         context_text, sources = build_context(docs, max_chars=4000)
         used_context = bool(context_text.strip())
     retr_ms = (time.time() - start_retr) * 1000 if MODE_RAG else 0
 
-    # LLM
+    # Appel LLM
     try:
         start_llm = time.time()
         answer = ask_groq(system_prompt, prompt, context_text, lang, used_context,
-                          temperature=st.session_state.get("temperature", 0.15) if "temperature" in st.session_state else 0.15,
-                          max_tokens=st.session_state.get("max_tokens", 700) if "max_tokens" in st.session_state else 700)
-        # Utiliser les sliders live
-        answer = ask_groq(system_prompt, prompt, context_text, lang, used_context,
-                          temperature=st.session_state.get("temperature_ui", None) or st.session_state.get("temperature", 0.15) if False else st.sidebar.session_state.get("🎯 Température (précision)", 0.15),
-                          max_tokens=st.sidebar.session_state.get("🧾 Longueur max (tokens)", 700))
-        # Ajout footer selon mode
+                          temperature=temperature, max_tokens=max_tokens)
         answer = add_footer(answer, sources, lang, used_context, MODE_RAG)
         gen_ms = (time.time() - start_llm) * 1000
 
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(answer)
 
         st.session_state.convos[st.session_state.active_id].append({"role": "assistant", "content": answer})
 
-        # Perf caption
+        # Perf caption (discrète)
         if MODE_RAG:
-            st.caption(f"🔎 Retrieval: {retr_ms:.0f} ms • 🧠 Génération: {gen_ms:.0f} ms • Mode: RAG")
+            st.caption(f"🔎 Retrieval: {retr_ms:.0f} ms • 🧠 Génération: {gen_ms:.0f} ms • Mode: RAG • Température: {temperature}")
         else:
-            st.caption(f"🧠 Génération: {gen_ms:.0f} ms • Mode: LLM seul")
+            st.caption(f"🧠 Génération: {gen_ms:.0f} ms • Mode: LLM seul • Température: {temperature}")
     except Exception as e:
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=assistant_avatar):
             st.error(f"⚠️ Erreur API Groq : {e}")
