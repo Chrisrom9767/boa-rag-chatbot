@@ -492,7 +492,24 @@ if not GROQ_API_KEY:
 
 client = groq.Client(api_key=GROQ_API_KEY)
 
-INDEX_PATH = os.getenv("INDEX_PATH", "faiss-compliance-banking-multilingual-index")
+# Chemins possibles pour l'index FAISS
+INDEX_PATHS = [
+    "faiss-compliance-banking-multilingual-index",  # Dossier complet
+    ".",  # Racine (si fichiers index.faiss et index.pkl sont à la racine)
+    os.path.dirname(__file__)  # Dossier du script
+]
+
+# Trouver le bon chemin de l'index
+INDEX_PATH = None
+for path in INDEX_PATHS:
+    faiss_file = os.path.join(path, "index.faiss") if path != "." else "index.faiss"
+    if os.path.exists(faiss_file):
+        INDEX_PATH = path
+        break
+
+# Si aucun index trouvé, utiliser le chemin par défaut
+if INDEX_PATH is None:
+    INDEX_PATH = os.getenv("INDEX_PATH", ".")
 DRIVE_LINK = os.getenv("DRIVE_LINK", "https://drive.google.com/drive/folders/TON_LIEN_FIXE_ICI")
 LOGO_URL = os.getenv("LOGO_URL", "")
 DEFAULT_MODEL = "llama-3.1-8b-instant"
@@ -608,18 +625,45 @@ def load_embeddings():
 
 @st.cache_resource(show_spinner="📂 Chargement de l'index FAISS...")
 def load_retriever(index_path: str):
-    if os.path.exists(index_path):
+    """Charge le retriever FAISS depuis le chemin spécifié"""
+    try:
+        # Vérifier les fichiers requis
+        if index_path == ".":
+            faiss_file = "index.faiss"
+            pkl_file = "index.pkl"
+        else:
+            faiss_file = os.path.join(index_path, "index.faiss")
+            pkl_file = os.path.join(index_path, "index.pkl")
+        
+        if not os.path.exists(faiss_file):
+            st.warning(f"⚠️ Fichier {faiss_file} introuvable")
+            return None, 0
+        
+        if not os.path.exists(pkl_file):
+            st.warning(f"⚠️ Fichier {pkl_file} introuvable")
+            return None, 0
+        
+        # Charger l'index
         vs = FAISS.load_local(
             index_path,
             embeddings=load_embeddings(),
             allow_dangerous_deserialization=True
         )
+        
+        # Créer le retriever
         retr = vs.as_retriever(
             search_type="mmr",
             search_kwargs={"k": 6, "fetch_k": 50, "lambda_mult": 0.3}
         )
-        return retr, vs.index.ntotal
-    return None, 0
+        
+        ntotal = vs.index.ntotal
+        st.success(f"✅ Index chargé : {ntotal} vecteurs trouvés")
+        
+        return retr, ntotal
+        
+    except Exception as e:
+        st.error(f"❌ Erreur de chargement : {str(e)}")
+        return None, 0
 
 def e5_query(text: str) -> str:
     t = text.strip()
@@ -850,7 +894,18 @@ with st.sidebar:
         """, unsafe_allow_html=True)
     
     with col2:
-        retriever, ntotal = load_retriever(INDEX_PATH)
+        # Gestion sécurisée du chargement de l'index
+        try:
+            if MODE_RAG and INDEX_PATH:
+                retriever, ntotal = load_retriever(INDEX_PATH)
+                if retriever is None:
+                    ntotal = 0
+            else:
+                ntotal = 0
+        except Exception as e:
+            ntotal = 0
+            st.caption(f"⚠️ Erreur index")
+        
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-value">{ntotal}</div>
@@ -961,6 +1016,34 @@ with st.sidebar:
     st.link_button("📚 Documentation BOA", url="https://www.boa.africa", use_container_width=True)
     
     st.markdown("---")
+    
+    # Diagnostic de l'index
+    with st.expander("🔍 Diagnostic système", expanded=False):
+        st.caption("**Chemin de l'index :**")
+        st.code(INDEX_PATH if INDEX_PATH else "Non défini")
+        
+        st.caption("**Fichiers FAISS détectés :**")
+        files_found = []
+        if INDEX_PATH:
+            faiss_file = "index.faiss" if INDEX_PATH == "." else os.path.join(INDEX_PATH, "index.faiss")
+            pkl_file = "index.pkl" if INDEX_PATH == "." else os.path.join(INDEX_PATH, "index.pkl")
+            
+            if os.path.exists(faiss_file):
+                files_found.append(f"✅ {faiss_file}")
+            else:
+                files_found.append(f"❌ {faiss_file}")
+            
+            if os.path.exists(pkl_file):
+                files_found.append(f"✅ {pkl_file}")
+            else:
+                files_found.append(f"❌ {pkl_file}")
+        
+        for f in files_found:
+            st.caption(f)
+        
+        st.caption(f"**Répertoire de travail :** `{os.getcwd()}`")
+    
+    st.markdown("---")
     st.caption("🛡️ **Lexi AI** v2.0 Premium\nPowered by Groq • FAISS • Streamlit")
 
 # ==============================
@@ -1010,13 +1093,24 @@ if prompt:
     context_text, sources = "", []
     start_retr = time.time()
     
-    if MODE_RAG and retriever is not None:
-        # Mettre à jour les paramètres de recherche
-        retriever.search_kwargs = {"k": k_docs, "fetch_k": k_docs * 8, "lambda_mult": lambda_mult}
-        q = e5_query(prompt)
-        docs = retriever.invoke(q)
-        context_text, sources = build_context(docs, max_chars=5000)
-        used_context = bool(context_text.strip())
+    if MODE_RAG:
+        try:
+            # Charger le retriever seulement si nécessaire
+            if INDEX_PATH:
+                retriever, ntotal = load_retriever(INDEX_PATH)
+                if retriever is not None:
+                    # Mettre à jour les paramètres de recherche
+                    retriever.search_kwargs = {"k": k_docs, "fetch_k": k_docs * 8, "lambda_mult": lambda_mult}
+                    q = e5_query(prompt)
+                    docs = retriever.invoke(q)
+                    context_text, sources = build_context(docs, max_chars=5000)
+                    used_context = bool(context_text.strip())
+                else:
+                    st.warning("⚠️ Retriever non disponible. Mode LLM seul activé.")
+            else:
+                st.warning("⚠️ INDEX_PATH non défini. Mode LLM seul activé.")
+        except Exception as e:
+            st.error(f"⚠️ Erreur RAG : {str(e)}\nMode LLM seul activé.")
     
     retr_ms = (time.time() - start_retr) * 1000 if MODE_RAG else 0
     
